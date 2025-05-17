@@ -123,12 +123,13 @@ export default function VISARPage() {
         if (!webgazerInstance.current) {
           try {
             // Configure WebGazer before starting
-            window.webgazer.setVideoElement(videoRef.current);
+            await window.webgazer.setRegression("ridge").begin();
+            //window.webgazer.setVideoElement(videoRef.current);
             window.webgazer.showVideo(false); 
+            window.webgazer.showPredictionPoints(false); // Show gaze prediction dot
             window.webgazer.showFaceOverlay(false);
             window.webgazer.showFaceFeedbackBox(false);
-            window.webgazer.showPredictionPoints(true); // Show gaze prediction dot
-
+            
             webgazerInstance.current = window.webgazer;
             
             setCalibrationClicks(0); setShowCalibration(true);
