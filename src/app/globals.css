@@ -1,3 +1,4 @@
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -107,3 +108,44 @@ body {
     /* Removed: font-family: var(--font-geist-mono); */
   }
 }
+
+/* Styles for WebGazer Calibration UI */
+@layer components {
+  .calibration-message {
+    position: absolute;
+    bottom: 20px; /* Moved to bottom */
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 200; /* Ensure it's above calibration points but below exit button if it were ever at bottom */
+    font-size: 1.125rem; /* Tailwind text-lg */
+    color: white;
+    background-color: rgba(0, 0, 0, 0.75);
+    padding: 0.5rem 1rem; /* Tailwind p-2 px-4 */
+    border-radius: 0.5rem; /* Tailwind rounded-lg */
+    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+  }
+
+  .calibration-point {
+    width: 25px;
+    height: 25px;
+    background-color: #3b82f6; /* Tailwind bg-blue-500 */
+    border-radius: 9999px; /* Tailwind rounded-full */
+    position: absolute;
+    z-index: 150; /* Below message, above image */
+    cursor: pointer;
+    opacity: 0.85;
+    border: 2px solid white;
+    transition: background-color 0.2s ease-in-out;
+  }
+
+  .calibration-point.clicked {
+    background-color: #22c55e; /* Tailwind bg-green-500 */
+    pointer-events: none;
+    opacity: 0.9;
+  }
+   .calibration-point:hover {
+    opacity: 1;
+    transform: scale(1.1);
+  }
+}
+
