@@ -10,7 +10,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Switch } from "@/components/ui/switch";
 import { Button } from '@/components/ui/button';
-import { AlertCircle, Info, Video } from 'lucide-react';
+import { AlertCircle, Info, Video, X } from 'lucide-react';
 import Image from 'next/image';
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { useToast } from "@/hooks/use-toast";
@@ -38,11 +38,13 @@ declare global {
 }
 
 
-const CALIBRATION_POINTS = [
-  [0.1, 0.1], [0.5, 0.1], [0.9, 0.1],
-  [0.1, 0.5], [0.5, 0.5], [0.9, 0.5],
-  [0.1, 0.9], [0.5, 0.9], [0.9, 0.9]
+const CALIBRATION_POINTS_CONFIG = [
+  { x: 0.2, y: 0.2, id: 'cp1' }, { x: 0.5, y: 0.2, id: 'cp2' }, { x: 0.8, y: 0.2, id: 'cp3' },
+  { x: 0.2, y: 0.5, id: 'cp4' }, { x: 0.5, y: 0.5, id: 'cp5' }, { x: 0.8, y: 0.5, id: 'cp6' },
+  { x: 0.2, y: 0.8, id: 'cp7' }, { x: 0.5, y: 0.8, id: 'cp8' }, { x: 0.8, y: 0.8, id: 'cp9' }
 ];
+const TOTAL_CALIBRATION_CLICKS = CALIBRATION_POINTS_CONFIG.length;
+
 
 const SIMULATIONS = {
   NONE: "none",
@@ -61,28 +63,89 @@ export default function VISARPage() {
   const [hasCameraPermission, setHasCameraPermission] = useState<boolean | null>(null);
   const [isRequestingPermission, setIsRequestingPermission] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
+  const imageContainerRef = useRef<HTMLDivElement>(null);
   const { toast } = useToast();
   
   const [gazePoint, setGazePoint] = useState<{ x: number; y: number } | null>(null);
-  const [calibrationClicks, setCalibrationClicks] = useState(0);
+  
   const [showCalibration, setShowCalibration] = useState(false);
+  const [calibrationStatus, setCalibrationStatus] = useState<{ [key: string]: boolean }>({});
+  const [calibrationClicksCount, setCalibrationClicksCount] = useState(0);
 
   
   const mousePosition = useMousePosition(); 
-  const currentCursorPosition = useEyeTracking && gazePoint && hasCameraPermission ? gazePoint : mousePosition;
+  const currentCursorPosition = useEyeTracking && gazePoint && hasCameraPermission && calibrationClicksCount >= TOTAL_CALIBRATION_CLICKS ? gazePoint : mousePosition;
 
   const webgazerInstance = useRef<any>(null);
   const [isWebGazerLoaded, setIsWebGazerLoaded] = useState(false);
 
   useEffect(() => {
     setIsMounted(true);
-    // Check if WebGazer is already loaded (e.g. from a previous session or fast refresh)
     if (window.webgazer) {
       setIsWebGazerLoaded(true);
     }
   }, []);
+
+  // Fullscreen API Toggle and Event Listener
+  const toggleFullscreen = async (shouldBeFullscreen: boolean) => {
+    if (shouldBeFullscreen) {
+      if (imageContainerRef.current && imageContainerRef.current.requestFullscreen) {
+        if (!document.fullscreenElement) {
+          try {
+            await imageContainerRef.current.requestFullscreen();
+            // setIsFullscreen(true) will be handled by 'fullscreenchange' listener
+          } catch (err) {
+            console.error("Error attempting to enable full-screen mode:", err);
+            setIsFullscreen(true); // Fallback to CSS-only fullscreen if API fails
+          }
+        } else {
+           setIsFullscreen(true); // Already in browser fullscreen, ensure state is synced
+        }
+      } else {
+        console.warn("Fullscreen API not supported or element not ready, using CSS fallback.");
+        setIsFullscreen(true);
+      }
+    } else { 
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+          // setIsFullscreen(false) will be handled by 'fullscreenchange' listener
+        } catch (err) {
+          console.error("Error attempting to disable full-screen mode:", err);
+          setIsFullscreen(false); 
+        }
+      } else {
+         setIsFullscreen(false); 
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+      if (!document.fullscreenElement && useEyeTracking) {
+        // If user exits fullscreen manually (e.g. Esc) while eye tracking is on,
+        // we might want to turn off eye tracking or reset its state.
+        // For now, we just sync state. If eye tracking switch is on, it will try to re-enter.
+      }
+    };
+
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    document.addEventListener('webkitfullscreenchange', handleFullscreenChange); // Safari
+    document.addEventListener('mozfullscreenchange', handleFullscreenChange);    // Firefox
+    document.addEventListener('MSFullscreenChange', handleFullscreenChange);     // IE/Edge
+
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+      document.removeEventListener('webkitfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('mozfullscreenchange', handleFullscreenChange);
+      document.removeEventListener('MSFullscreenChange', handleFullscreenChange);
+    };
+  }, [useEyeTracking]);
+
 
   const loadWebGazerScript = () => {
     return new Promise<void>((resolve, reject) => {
@@ -100,189 +163,222 @@ export default function VISARPage() {
       };
       script.onerror = (error) => {
         console.error("Falhou to load WebGazer script:", error);
+        setTimeout(() => {
         toast({ variant: 'destructive', title: 'Eye Tracking Error', description: 'Falhou to load WebGazer.js script.' });
+        },0);
         reject(error);
       };
       document.head.appendChild(script);
     });
   };
 
-  // Effect to load WebGazer script when eye tracking is enabled
   useEffect(() => {
     if (useEyeTracking && !isWebGazerLoaded && !window.webgazer) {
       loadWebGazerScript().catch(err => {
-        setUseEyeTracking(false); // Disable toggle if script fails to load
+        setUseEyeTracking(false); 
+        toggleFullscreen(false);
       });
     }
   }, [useEyeTracking, isWebGazerLoaded]);
 
-  // Effect to initialize and manage WebGazer instance
   useEffect(() => {
     const manageWebGazerInstance = async () => {
       if (useEyeTracking && hasCameraPermission && isMounted && isWebGazerLoaded && window.webgazer) {
         if (!webgazerInstance.current) {
+          if (!videoRef.current || videoRef.current.readyState < videoRef.current.HAVE_ENOUGH_DATA) {
+            console.warn("Video stream not ready for WebGazer yet.");
+            // Optionally, add a small delay and retry or a message to the user.
+            // For now, we'll let it attempt and potentially fail, to be caught by the try-catch.
+          }
           try {
-            // Configure WebGazer before starting
             await window.webgazer.setRegression("ridge").begin();
-            //window.webgazer.setVideoElement(videoRef.current);
-            window.webgazer.showVideo(false); 
-            window.webgazer.showPredictionPoints(false); // Show gaze prediction dot
-            window.webgazer.showFaceOverlay(false);
-            window.webgazer.showFaceFeedbackBox(false);
-            
             webgazerInstance.current = window.webgazer;
             
-            setCalibrationClicks(0); setShowCalibration(true);
-await webgazerInstance.current.setGazeListener((data: { x: number; y: number } | null, elapsedTime: number) => {
-              if (data && webgazerInstance.current && !webgazerInstance.current.isPaused()) {
-                setGazePoint({ x: data.x, y: data.y });
-              }
-            }).begin();
-
+            webgazerInstance.current.showVideo(false); 
+            webgazerInstance.current.showPredictionPoints(false); 
+            webgazerInstance.current.showFaceOverlay(false);
+            webgazerInstance.current.showFaceFeedbackBox(false);
+            
+            setCalibrationStatus({});
+            setCalibrationClicksCount(0);
+            setShowCalibration(true); // Start calibration process
+            
+            // Gaze listener will be set after calibration
             toast({
               title: 'Rastreamento Ocular Inicializado',
-              description: 'O WebGazer.js está ativo. Por favor, olhe para vários pontos na tela e clique para calibrar. O ponto vermelho mostra a previsão do olhar.',
+              description: 'Iniciando calibração. Por favor, clique nos pontos azuis.',
             });
-            } catch (error) {
-              console.error("Erro ao inicializar o WebGazer:", error);
-              toast({
-                variant: 'destructive',
-                title: 'Erro no Rastreamento Ocular',
-                description: 'Não foi possível inicializar o WebGazer.js.'
-              });
-              setUseEyeTracking(false); // Desativa se falhar
-            }
-            
-            } else if (webgazerInstance.current.isPaused()) {
-              try {
-                await webgazerInstance.current.resume();
-                toast({
-                  title: 'Rastreamento Ocular Retomado',
-                  description: 'O WebGazer.js foi retomado.'
-                });
-              } catch (error) {
-                console.error("Erro ao retomar o WebGazer:", error);
-                toast({
-                  variant: 'destructive',
-                  title: 'Erro no Rastreamento Ocular',
-                  description: 'Não foi possível retomar o WebGazer.js.'
-                });
-              }
-            }
-            
-            } else {
-              // Condições não atendidas (ex: rastreamento desligado ou sem permissão)
-              if (webgazerInstance.current && !webgazerInstance.current.isPaused()) {
-                try {
-                  await webgazerInstance.current.pause();
-                  console.log("WebGazer.js pausado.");
-                  // toast({ title: 'Rastreamento Ocular Pausado', description: 'O WebGazer.js foi pausado.' }); // Pode ser incômodo
-                } catch (error) {
-                  console.error("Erro ao pausar o WebGazer:", error);
-                }
+          } catch (error) {
+            console.error("Erro ao inicializar o WebGazer:", error);
+            toast({
+              variant: 'destructive',
+              title: 'Erro no Rastreamento Ocular',
+              description: `Não foi possível inicializar o WebGazer.js. Verifique o console. Causa: ${error instanceof Error ? error.message : String(error)}`
+            });
+            setUseEyeTracking(false);
+            toggleFullscreen(false);
+          }
         }
-        if (gazePoint !== null) setGazePoint(null);
-      }
+      } else if (!useEyeTracking && webgazerInstance.current) {
+        try {
+          await webgazerInstance.current.end();
+          console.log("WebGazer.js ended by toggle.");
+        } catch (e) { console.error("Error ending WebGazer:", e); }
+        webgazerInstance.current = null;
+        setGazePoint(null);
+        setShowCalibration(false);
+      }      
     };
 
     manageWebGazerInstance();
-
     
-  const handleCalibrationClick = (normX: number, normY: number, index: number) => {
-    const x = normX * window.innerWidth;
-    const y = normY * window.innerHeight;
-    window.webgazer?.recordScreenPosition(x, y, 'click');
-    setCalibrationClicks((prev) => {
-      const next = prev + 1;
-      if (next >= 9) {
-        setShowCalibration(false);
-        toast({ title: 'Calibração concluída', description: 'WebGazer foi calibrado com 9 pontos.' });
-      }
-      return next;
-    });
-  };
-
-
-    // Cleanup on component unmount
     return () => {
-      if (webgazerInstance.current) {
-        const wg = webgazerInstance.current;
-        if (wg && typeof wg.end === 'function') {
-          try {
-            wg.end(); 
-            console.log("WebGazer.js ended on component unmount.");
-          } catch (e) { console.error("Error ending WebGazer on unmount:", e); }
+      if (webgazerInstance.current && typeof webgazerInstance.current.end === 'function') {
+        try {
+          webgazerInstance.current.end();
+          webgazerInstance.current = null;
+        } catch (e) {
+          console.error("Error ending WebGazer:", e);
         }
-        webgazerInstance.current = null;
+      }
+    
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
       }
     };
-  }, [useEyeTracking, hasCameraPermission, isMounted, isWebGazerLoaded]);
+    
+  }, [useEyeTracking, hasCameraPermission, isMounted, isWebGazerLoaded, toast]);
+
+
+  const handleCalibrationClick = (pointId: string, normX: number, normY: number) => {
+    if (!webgazerInstance.current || calibrationStatus[pointId]) return;
+
+    const x = normX * window.innerWidth;
+    const y = normY * window.innerHeight;
+    webgazerInstance.current.recordScreenPosition(x, y, 'click');
+    
+    setCalibrationStatus(prev => ({ ...prev, [pointId]: true }));
+    setCalibrationClicksCount(prev => {
+        const newCount = prev + 1;
+        if (newCount >= TOTAL_CALIBRATION_CLICKS) {
+            setShowCalibration(false);
+            toast({ title: 'Calibração concluída', description: 'WebGazer foi calibrado.' });
+            // Start gaze listener *after* calibration
+            webgazerInstance.current.setGazeListener((data: { x: number; y: number } | null, elapsedTime: number) => {
+              if (data && webgazerInstance.current && !isNaN(data.x) && !isNaN(data.y)) {
+                setGazePoint({ x: data.x, y: data.y });
+              }
+            }).begin(); // Ensure listener is active
+        }
+        return newCount;
+    });
+  };
+  
+  // Handle window resize during calibration
+  useEffect(() => {
+    const handleResize = () => {
+      if (showCalibration && calibrationClicksCount < TOTAL_CALIBRATION_CLICKS) {
+        setCalibrationStatus({});
+        setCalibrationClicksCount(0);
+        toast({ title: 'Janela Redimensionada', description: 'A calibração foi reiniciada.' });
+      }
+    };
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, [showCalibration, calibrationClicksCount, toast]);
 
 
   const requestCameraPermission = async () => {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+       toast({ variant: 'destructive', title: 'Browser Incompatível', description: 'Seu navegador não suporta acesso à câmera.' });
+       return false;
+    }
     setIsRequestingPermission(true);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       setHasCameraPermission(true);
-      // setUseEyeTracking(true); // Let the switch handler do this
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
+        await videoRef.current.play().catch(err => console.warn("Video play interrupted or failed:", err));
       }
       toast({
         title: 'Camera Access Granted',
         description: 'O rastreamento ocular agora pode ser ativado. O vídeo da sua câmera é processado localmente.',
       });
-      return true; // Indicate success
+      return true;
     } catch (error) {
       console.error('Erro ao acessar câmera:', error);
       setHasCameraPermission(false);
-      setUseEyeTracking(false); 
+      // setUseEyeTracking(false); // Handled by toggle
       toast({
         variant: 'destructive',
         title: 'Acesso à Câmera Negado',
-description: 'Por favor, ative as permissões de câmera nas configurações do seu navegador para usar o rastreamento ocular.',
+        description: 'Por favor, ative as permissões de câmera nas configurações do seu navegador para usar o rastreamento ocular.',
       });
-      return false; // Indicate failure
+      return false;
     } finally {
-      setIsRequestingPermission(true);
+      setIsRequestingPermission(false);
     }
   };
 
   const handleEyeTrackingToggle = async (checked: boolean) => {
+    if (!checked) {
+      setUseEyeTracking(false);
+      console.log("Eye tracking stopped by user.");
+    
+      // ✅ Safely stop the video stream to release the camera
+      if (videoRef.current && videoRef.current.srcObject) {
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
+      }
+    
+      // Optional: fully end WebGazer if needed
+      if (webgazerInstance.current && typeof webgazerInstance.current.end === "function") {
+        webgazerInstance.current.end();
+        webgazerInstance.current = null;
+      }
+    }
+    
     if (checked) {
       if (hasCameraPermission === null || hasCameraPermission === false) {
         const permissionGranted = await requestCameraPermission();
         if (permissionGranted) {
-          setUseEyeTracking(true);
+          setUseEyeTracking(true); // This will trigger the WebGazer setup useEffect
+          await toggleFullscreen(true);
         } else {
-          // requestCameraPermission handles toast for denial, switch remains off
-          setUseEyeTracking(false); 
+          setUseEyeTracking(false); // Ensure switch is off if permission fails
+          // No need to toggle fullscreen off, as it wasn't turned on
         }
-      } else { // Already have permission
+      } else { 
         setUseEyeTracking(true);
-         // Ensure video stream is active if it was stopped
+        await toggleFullscreen(true);
         if (videoRef.current && !videoRef.current.srcObject && navigator.mediaDevices) {
            navigator.mediaDevices.getUserMedia({ video: true })
             .then(stream => {
-              if (videoRef.current) videoRef.current.srcObject = stream;
+              if (videoRef.current) {
+                videoRef.current.srcObject = stream;
+                videoRef.current.play().catch(err => console.warn("Video play interrupted or failed:", err));
+              }
             })
             .catch(err => {
               console.error("Error re-accessing camera: ", err);
               setHasCameraPermission(false); 
               setUseEyeTracking(false);
+              toggleFullscreen(false);
               toast({ variant: "destructive", title: "Camera Error", description: "Could not re-initialize camera."});
             });
         }
       }
-    } else { // Switch turned off
-      setUseEyeTracking(false);
-      console.log("Eye tracking stopped by user.");
+    } else { 
+      setUseEyeTracking(false); // This will trigger WebGazer cleanup useEffect
+      await toggleFullscreen(false);
       if (videoRef.current && videoRef.current.srcObject) {
-        // WebGazer pause should handle not needing the stream, but stopping it is safer for privacy when explicitly turned off
-        // const stream = videoRef.current.srcObject as MediaStream;
-        // stream.getTracks().forEach(track => track.stop());
-        // videoRef.current.srcObject = null; 
-        // Let WebGazer manage the stream via pause/end. If we stop tracks, resume might fail.
+        const stream = videoRef.current.srcObject as MediaStream;
+        stream.getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null; 
       }
     }
   };
@@ -290,7 +386,7 @@ description: 'Por favor, ative as permissões de câmera nas configurações do 
   if (!isMounted) {
     return (
       <div className="flex flex-col min-h-screen bg-background">
-        <Header />
+       {!isFullscreen && <Header />}
         <main className="flex-grow container mx-auto p-4 md:p-8 flex items-center justify-center">
           <div className="text-center">
             <svg className="mx-auto h-12 w-12 animate-spin text-primary" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -327,125 +423,134 @@ description: 'Por favor, ative as permissões de câmera nas configurações do 
   return (
     <div className="flex flex-col min-h-screen bg-secondary/30">
       <Head>
-        {/* WebGazer.js script is loaded dynamically by loadWebGazerScript function */}
+        {/* WebGazer.js script is loaded dynamically */}
       </Head>
-      <Header />
-      <main className="flex-grow container mx-auto p-4 md:p-6 lg:p-8">
-        <div className="grid lg:grid-cols-3 gap-6 lg:gap-8">
+      {!isFullscreen && <Header />}
+      <main className={`flex-grow ${isFullscreen ? 'p-0 m-0 max-w-full w-screen h-screen overflow-hidden' : 'container mx-auto p-4 md:p-6 lg:p-8'}`}>
+        <div className={`${isFullscreen ? 'h-full w-full' : 'grid lg:grid-cols-3 gap-6 lg:gap-8'}`}>
           
-          <Card className="lg:col-span-1 shadow-xl rounded-lg overflow-hidden">
-            <CardHeader className="bg-slate-50 dark:bg-slate-800/50 border-b">
-              <CardTitle className="text-xl md:text-2xl">Controles</CardTitle>
-              <CardDescription>Selecione uma condição e ajuste as configurações</CardDescription>
-            </CardHeader>
-            <CardContent className="p-4 md:p-6 space-y-6">
-              <Tabs value={activeSimulation} onValueChange={(value) => setActiveSimulation(value as SimulationType)}>
-                <TabsList className="grid w-full grid-cols-2 gap-2 mb-1">
-                  <TabsTrigger value={SIMULATIONS.NONE}>Normal</TabsTrigger>
-                  <TabsTrigger value={SIMULATIONS.GLAUCOMA}>Glaucoma</TabsTrigger>
-                </TabsList>
-                <TabsList className="grid w-full grid-cols-2 gap-2">
-                  <TabsTrigger value={SIMULATIONS.MACULAR}>Deg. Macular</TabsTrigger>
-                  <TabsTrigger value={SIMULATIONS.CATARACTS}>Catarata</TabsTrigger>
-                </TabsList>
-              </Tabs>
+          {!isFullscreen && (
+            <Card className="lg:col-span-1 shadow-xl rounded-lg overflow-hidden">
+              <CardHeader className="bg-slate-50 dark:bg-slate-800/50 border-b">
+                <CardTitle className="text-xl md:text-2xl">Controles</CardTitle>
+                <CardDescription>Selecione uma condição e ajuste as configurações</CardDescription>
+              </CardHeader>
+              <CardContent className="p-4 md:p-6 space-y-6">
+                <Tabs value={activeSimulation} onValueChange={(value) => setActiveSimulation(value as SimulationType)}>
+                  <TabsList className="grid w-full grid-cols-2 gap-2 mb-1">
+                    <TabsTrigger value={SIMULATIONS.NONE}>Normal</TabsTrigger>
+                    <TabsTrigger value={SIMULATIONS.GLAUCOMA}>Glaucoma</TabsTrigger>
+                  </TabsList>
+                  <TabsList className="grid w-full grid-cols-2 gap-2">
+                    <TabsTrigger value={SIMULATIONS.MACULAR}>Deg. Macular</TabsTrigger>
+                    <TabsTrigger value={SIMULATIONS.CATARACTS}>Catarata</TabsTrigger>
+                  </TabsList>
+                </Tabs>
 
-              <Alert variant="default" className="mt-2">
-                <Info className="h-5 w-5" />
-                <AlertTitle className="font-semibold">Sobre esta simulação:</AlertTitle>
-                <AlertDescription className="text-sm">
-                  {simulationDescriptions[activeSimulation]}
-                </AlertDescription>
-              </Alert>
+                <Alert variant="default" className="mt-2">
+                  <Info className="h-5 w-5" />
+                  <AlertTitle className="font-semibold">Sobre esta simulação:</AlertTitle>
+                  <AlertDescription className="text-sm">
+                    {simulationDescriptions[activeSimulation]}
+                  </AlertDescription>
+                </Alert>
 
-              {activeSimulation === SIMULATIONS.MACULAR && (
-                <div className="space-y-3 pt-4 border-t">
-                  <Label htmlFor="macular-severity" className="font-medium">Severidade: {macularSeverity}%</Label>
-                  <Slider
-                    id="macular-severity"
-                    min={0}
-                    max={100}
-                    step={1}
-                    value={[macularSeverity]}
-                    onValueChange={(value) => setMacularSeverity(value[0])}
-                    aria-label="Macular Degeneration Severity"
-                  />
+                {activeSimulation === SIMULATIONS.MACULAR && (
+                  <div className="space-y-3 pt-4 border-t">
+                    <Label htmlFor="macular-severity" className="font-medium">Severidade: {macularSeverity}%</Label>
+                    <Slider
+                      id="macular-severity"
+                      min={0}
+                      max={100}
+                      step={1}
+                      value={[macularSeverity]}
+                      onValueChange={(value) => setMacularSeverity(value[0])}
+                      aria-label="Macular Degeneration Severity"
+                    />
+                  </div>
+                )}
+
+                {activeSimulation === SIMULATIONS.CATARACTS && (
+                  <div className="space-y-3 pt-4 border-t">
+                    <Label htmlFor="cataracts-intensity" className="font-medium">Intensidade do Desfoque: {cataractsIntensity.toFixed(1)}px</Label>
+                    <Slider
+                      id="cataracts-intensity"
+                      min={0}
+                      max={10}
+                      step={0.1}
+                      value={[cataractsIntensity]}
+                      onValueChange={(value) => setCataractsIntensity(value[0])}
+                      aria-label="Cataracts Intensity"
+                    />
+                  </div>
+                )}
+                
+                <div className="space-y-3 pt-6 border-t">
+                   <div className="flex items-center justify-between">
+                     <Label htmlFor="eye-tracking-switch" className="text-base font-medium">Usar Rastreamento ocular</Label>
+                     <TooltipProvider>
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                        <Switch
+                          id="eye-tracking-switch"
+                          checked={useEyeTracking}
+                          onCheckedChange={handleEyeTrackingToggle}
+                          disabled={isRequestingPermission}
+                          aria-label="Toggle Eye Tracking"
+                          className="data-[state=checked]:bg-lime-500 border border-lime-600"
+                        />
+                        </TooltipTrigger>
+                        <TooltipContent>
+                          <p>Usa a webcam via WebGazer.js para estimar o olhar.</p> 
+                          <p>Requer permissão da câmera. Os dados são processados localmente.</p>
+                          <p>Clique nos pontos da tela se aparecerem avisos de calibração.</p>
+                        </TooltipContent>
+                      </Tooltip>
+                     </TooltipProvider>
+                   </div>
+
+                  <div className="space-y-2">
+                    {/* Video element is crucial for WebGazer but can be hidden via CSS if preferred post-setup */}
+                    <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted border object-cover" autoPlay muted playsInline />
+                    
+                    {useEyeTracking && hasCameraPermission === false && (
+                      <Alert variant="destructive">
+                        <AlertCircle className="h-4 w-4" />
+                        <AlertTitle>O acesso à Câmera é necessário</AlertTitle>
+                        <AlertDescription>
+                          O rastreamento ocular precisa de permissão para usar a câmera. Por favor, permita o acesso. Se você negou a permissão, talvez seja necessário redefini-la nas configurações do navegador.
+                        </AlertDescription>
+                      </Alert>
+                    )}
+
+                    {useEyeTracking && hasCameraPermission && (
+                      <Alert variant="default" className="bg-accent/10 border-accent/30">
+                         <Video className="h-5 w-5 text-accent" />
+                         <AlertTitle className="text-accent">Eye Tracking Active</AlertTitle>
+                         <AlertDescription className="text-accent/80">
+                           O WebGazer.js está tentando rastrear o seu olhar. A calibração pode ser necessária (clique nos avisos na tela, se aparecerem). O vídeo é processado localmente.
+                         </AlertDescription>
+                      </Alert>
+                    )}
+                   </div>
                 </div>
-              )}
+              </CardContent>
+              <CardFooter className="bg-slate-50 dark:bg-slate-800/50 border-t p-4">
+                 <p className="text-xs text-muted-foreground">Mova o cursor ou use o rastreamento ocular experimental. As simulações afetam a imagem à direita.</p>
+              </CardFooter>
+            </Card>
+          )}
 
-              {activeSimulation === SIMULATIONS.CATARACTS && (
-                <div className="space-y-3 pt-4 border-t">
-                  <Label htmlFor="cataracts-intensity" className="font-medium">Intensidade do Desfoque: {cataractsIntensity.toFixed(1)}px</Label>
-                  <Slider
-                    id="cataracts-intensity"
-                    min={0}
-                    max={10}
-                    step={0.1}
-                    value={[cataractsIntensity]}
-                    onValueChange={(value) => setCataractsIntensity(value[0])}
-                    aria-label="Cataracts Intensity"
-                  />
-                </div>
-              )}
-              
-              <div className="space-y-3 pt-6 border-t">
-                 <div className="flex items-center justify-between">
-                   <Label htmlFor="eye-tracking-switch" className="text-base font-medium">Usar Rastreamento ocular</Label>
-                   <TooltipProvider>
-                    <Tooltip>
-                      <TooltipTrigger asChild>
-                      <Switch
-                        id="eye-tracking-switch"
-                        checked={useEyeTracking}
-                        onCheckedChange={handleEyeTrackingToggle}
-                        disabled={isRequestingPermission}
-                        aria-label="Toggle Eye Tracking"
-                        className="data-[state=checked]:bg-lime-500 border border-lime-600"
-                      />
-                      </TooltipTrigger>
-                      <TooltipContent>
-                        <p>Usa a webcam via WebGazer.js para estimar o olhar.</p> 
-                        <p>Requer permissão da câmera. Os dados são processados localmente.</p>
-                        <p>Clique nos pontos da tela se aparecerem avisos de calibração.</p>
-                      </TooltipContent>
-                    </Tooltip>
-                   </TooltipProvider>
-                 </div>
-
-                <div className="space-y-2">
-                  <video ref={videoRef} className="w-full aspect-video rounded-md bg-muted border object-cover" autoPlay muted playsInline />
-                  
-                  {/* Alert for when eye tracking is on but permission denied */}
-                  {useEyeTracking && hasCameraPermission === false && (
-                    <Alert variant="destructive">
-                      <AlertCircle className="h-4 w-4" />
-                      <AlertTitle>O acesso à Câmera é necessário</AlertTitle>
-                      <AlertDescription>
-                        O rastreamento ocular precisa de permissão para usar a câmera. Por favor, permita o acesso. Se você negou a permissão, talvez seja necessário redefini-la nas configurações do navegador.
-                      </AlertDescription>
-                    </Alert>
-                  )}
-
-                  {/* Alert for when eye tracking is active */}
-                  {useEyeTracking && hasCameraPermission && (
-                    <Alert variant="default" className="bg-accent/10 border-accent/30">
-                       <Video className="h-5 w-5 text-accent" />
-                       <AlertTitle className="text-accent">Eye Tracking Active</AlertTitle>
-                       <AlertDescription className="text-accent/80">
-                         O WebGazer.js está tentando rastrear o seu olhar. A calibração pode ser necessária (clique nos avisos na tela, se aparecerem). O vídeo é processado localmente.
-                       </AlertDescription>
-                    </Alert>
-                  )}
-                 </div>
-              </div>
-
-            </CardContent>
-            <CardFooter className="bg-slate-50 dark:bg-slate-800/50 border-t p-4">
-               <p className="text-xs text-muted-foreground">Mova o cursor ou use o rastreamento ocular experimental. As simulações afetam a imagem à direita.</p>
-            </CardFooter>
-          </Card>
-
-          <div className="lg:col-span-2 relative flex items-center justify-center bg-card dark:bg-card/80 rounded-xl shadow-xl overflow-hidden aspect-[16/10] min-h-[300px] md:min-h-[450px] lg:min-h-[500px] outline-dashed outline-2 outline-offset-4 outline-border/50">
+          <div 
+            ref={imageContainerRef}
+            className={
+              isFullscreen && document.fullscreenElement
+              ? 'w-full h-full flex items-center justify-center bg-background' 
+              : isFullscreen 
+              ? 'fixed inset-0 z-[9998] bg-background flex items-center justify-center' 
+              : 'lg:col-span-2 relative flex items-center justify-center bg-card dark:bg-card/80 rounded-xl shadow-xl overflow-hidden aspect-[16/10] min-h-[300px] md:min-h-[450px] lg:min-h-[500px] outline-dashed outline-2 outline-offset-4 outline-border/50'
+            }
+          >
             {renderSimulation(
               <Image
                 src="https://picsum.photos/seed/empathyvision/1200/750"
@@ -459,39 +564,111 @@ description: 'Por favor, ative as permissões de câmera nas configurações do 
               />
             )}
              
-{showCalibration && (
-  <div className="absolute inset-0 z-50 pointer-events-none">
-    {CALIBRATION_POINTS.map(([x, y], i) => (
-      <button
-        key={i}
-        style={{
-          position: 'absolute',
-          left: `${x * 100}%`,
-          top: `${y * 100}%`,
-          transform: 'translate(-50%, -50%)',
-        }}
-        className="w-5 h-5 bg-blue-500 border-2 border-white rounded-full pointer-events-auto hover:bg-green-500 transition-colors"
-        onClick={() => handleCalibrationClick(x, y, i)}
-        aria-label={`Calibration point ${i + 1}`}
-      />
-    ))}
-  </div>
-)}
+            {isFullscreen && showCalibration && calibrationClicksCount < TOTAL_CALIBRATION_CLICKS && (
+              <>
+                <div className="calibration-message">
+                  Clique nos pontos azuis para calibrar: ({calibrationClicksCount}/{TOTAL_CALIBRATION_CLICKS})
+                </div>
+                {CALIBRATION_POINTS_CONFIG.map((point) => (
+                  <button
+                    key={point.id}
+                    id={point.id}
+                    style={{
+                      left: `${point.x * 100}%`,
+                      top: `${point.y * 100}%`,
+                      transform: 'translate(-50%, -50%)',
+                    }}
+                    className={`calibration-point ${calibrationStatus[point.id] ? 'clicked' : ''}`}
+                    onClick={() => handleCalibrationClick(point.id, point.x, point.y)}
+                    aria-label={`Ponto de calibração ${point.id}`}
+                    disabled={calibrationStatus[point.id]}
+                  />
+                ))}
+              </>
+            )}
+            {useEyeTracking && gazePoint && calibrationClicksCount >= TOTAL_CALIBRATION_CLICKS && isFullscreen && (
+              <div 
+                style={{ 
+                  position: 'absolute', 
+                  left: `${gazePoint.x - 10}px`, 
+                  top: `${gazePoint.y - 10}px`,
+                  width: '20px',
+                  height: '20px',
+                  backgroundColor: 'rgba(255,0,0,0.5)',
+                  borderRadius: '50%',
+                  pointerEvents: 'none',
+                  zIndex: 200, // Ensure gaze dot is above calibration message if they were ever to overlap
+                  transition: 'left 0.05s linear, top 0.05s linear' // Smoother movement
+                }}
+                aria-hidden="true"
+              />
+            )}
 
-<div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
-                Imagem: picsum.photos/seed/empathyvision
-            </div>
+            {isFullscreen && (
+              <Button
+                onClick={() => toggleFullscreen(false)}
+                variant="outline"
+                className="absolute top-4 left-4 z-[9999] bg-background/80 hover:bg-background"
+              >
+                <X className="mr-2 h-4 w-4" /> Sair da Tela Cheia
+              </Button>
+            )}
+
+            {!isFullscreen && (
+                <div className="absolute bottom-2 right-2 bg-black/50 text-white text-xs px-2 py-1 rounded">
+                    Imagem: picsum.photos/seed/empathyvision
+                </div>
+            )}
           </div>
         </div>
         
-        <footer className="text-center py-8 mt-8 lg:mt-12 text-muted-foreground">
-          <p className="text-sm">&copy; {new Date().getFullYear()} VISAR - Vivência Interativa de Simulações sobre Alterações da Retina.</p>
-          <p className="text-sm">Desenvolvido por Claudio Coutinho. Universidade do Estado do Pará (UEPA)</p>
-          <p className="text-xs mt-2 max-w-2xl mx-auto">As simulações são ilustrativas e têm como objetivo fornecer uma compreensão conceitual; elas podem não representar com precisão condições médicas reais. O rastreamento ocular é um recurso experimental, requer acesso à webcam e processa os dados localmente no seu navegador por meio do WebGazer.js.</p>
-        </footer>
+        {!isFullscreen && (
+          <footer className="text-center py-8 mt-8 lg:mt-12 text-muted-foreground">
+            <p className="text-sm">&copy; {new Date().getFullYear()} VISAR - Vivência Interativa de Simulações sobre Alterações da Retina.</p>
+            <p className="text-xs mt-2 max-w-2xl mx-auto">As simulações são ilustrativas e têm como objetivo fornecer uma compreensão conceitual; elas podem não representar com precisão condições médicas reais. O rastreamento ocular é um recurso experimental, requer acesso à webcam e processa os dados localmente no seu navegador por meio do WebGazer.js.</p>
+            <p className="text-sm">Desenvolvido por:</p>
+            <div className="mt-6 flex justify-center items-center space-x-4 md:space-x-8">
+              <div className="relative h-16 w-32 md:h-20 md:w-60">
+                <Image 
+                  src="/images/uepa_logo2.png" 
+                  alt="Universidade do Estado do Pará" 
+                  layout="fill" 
+                  objectFit="contain"
+                  data-ai-hint="university logo"
+                  unoptimized
+                />
+              </div>
+              <div className="relative h-16 w-32 md:h-20 md:w-60">
+                <Image 
+                  src="/images/unifesspa_logo.png" 
+                  alt="Universidade do Sul e Sudeste do Pará" 
+                  layout="fill" 
+                  objectFit="contain"
+                  data-ai-hint="university logo"
+                  unoptimized
+                />
+              </div>
+              <div className="relative h-16 w-32 md:h-20 md:w-60">
+                <Image 
+                  src="/images/medialab_logo.png" 
+                  alt="MediaLab/BR" 
+                  layout="fill" 
+                  objectFit="contain"
+                  data-ai-hint="research group"
+                  unoptimized
+                />
+              </div>
+            </div>
+          </footer>
+        )}
       </main>
     </div>
   );
 }
+    
+
+    
+
+    
 
     
